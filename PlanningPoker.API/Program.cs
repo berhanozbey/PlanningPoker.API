@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PlanningPoker.API.Data;
-using PlanningPoker.API.Hubs; // Hub klasörünü tanýmasý için
+using PlanningPoker.API.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,15 +8,15 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// 2. KRÝTÝK: CORS Politikasýný Tanýmla
+// 2. GÜNCELLENEN CORS POLÝTÝKASI (Hem Yerel Hem Canlý Link Eklendi)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("CorsPolicy", policy =>
     {
-        policy.WithOrigins("http://localhost:4200") // Angular adresi
+        policy.WithOrigins("http://localhost:4200", "https://vbplanningpokerb.onrender.com")
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // SignalR için EN ÖNEMLÝ satýr
+              .AllowCredentials(); // SignalR için hayati önem taþýr
     });
 });
 
@@ -28,14 +28,12 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// 4. SIRALAMA ÇOK ÖNEMLÝ: Pipeline (Boru Hattý) Yapýlandýrmasý
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// 4. SIRALAMA (Pipeline Yapýlandýrmasý)
+// Not: Swagger'ý canlýda da görmek istersen if (app.Environment.IsDevelopment()) kýsmýný kaldýrabilirsin.
+app.UseSwagger();
+app.UseSwaggerUI();
 
-// ÖNCE Cors, SONRA Authorization!
+// EN ÖNEMLÝ SIRALAMA: Önce CORS, sonra Authorization!
 app.UseCors("CorsPolicy");
 
 app.UseHttpsRedirection();
