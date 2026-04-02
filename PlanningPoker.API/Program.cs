@@ -34,7 +34,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// KRÝTÝK: Önce CORS, sonra Authorization!
+// KRÝTÝK: Önce CORS, sonra Authorization
 app.UseCors("CorsPolicy");
 
 app.UseHttpsRedirection();
