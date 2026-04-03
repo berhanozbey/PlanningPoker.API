@@ -17,6 +17,17 @@ namespace PlanningPoker.API.Hubs
         // 1. Odaya Katılma ve KUSURSUZ YENİDEN BAĞLANMA (Auto-Rejoin)
         public async Task JoinRoom(Guid roomId, Guid userId, string userName, int role, string currentVote)
         {
+            // ✨ GÜVENLİK: Önce odanın hala var olduğundan emin ol (Çökmeyi önler)
+            var room = await _context.Rooms.FindAsync(roomId);
+            if (room == null) return;
+
+            // ✨ HAYALET AVCISI: Bu tarayıcı bağlantısında (sekmede) asılı kalmış ESKİ hayaletler varsa onları acımadan sil!
+            var oldGhosts = await _context.Users.Where(u => u.SignalRConnectionId == Context.ConnectionId && u.Id != userId).ToListAsync();
+            if (oldGhosts.Any())
+            {
+                _context.Users.RemoveRange(oldGhosts);
+            }
+
             var user = await _context.Users.FindAsync(userId);
 
             if (user == null)
