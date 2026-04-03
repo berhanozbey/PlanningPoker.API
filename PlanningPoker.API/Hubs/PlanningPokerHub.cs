@@ -14,27 +14,44 @@ namespace PlanningPoker.API.Hubs
             _context = context;
         }
 
-        // 1. Odaya Katılma ve Bağlantıyı Eşleştirme
-        public async Task JoinRoom(Guid roomId, Guid userId)
+        // 1. Odaya Katılma ve KUSURSUZ YENİDEN BAĞLANMA (Auto-Rejoin)
+        public async Task JoinRoom(Guid roomId, Guid userId, string userName, int role, string currentVote)
         {
             var user = await _context.Users.FindAsync(userId);
-            if (user != null)
-            {
-                user.SignalRConnectionId = Context.ConnectionId;
-                await _context.SaveChangesAsync();
 
-                await Groups.AddToGroupAsync(Context.ConnectionId, roomId.ToString());
-                await Clients.Group(roomId.ToString()).SendAsync("UserUpdated");
+            if (user == null)
+            {
+                // Adam F5 atmış ve silinmiş! Onu hafızasındaki bilgilerle masaya GİZLİCE geri ekliyoruz:
+                user = new User
+                {
+                    Id = userId,
+                    Name = userName,
+                    Role = (UserRole)role,
+                    RoomId = roomId,
+                    CurrentVote = string.IsNullOrEmpty(currentVote) ? null : currentVote,
+                    IsEdited = false
+                };
+                _context.Users.Add(user);
             }
+
+            user.SignalRConnectionId = Context.ConnectionId;
+            await _context.SaveChangesAsync();
+
+            await Groups.AddToGroupAsync(Context.ConnectionId, roomId.ToString());
+            await Clients.Group(roomId.ToString()).SendAsync("UserUpdated");
         }
 
-        // 2. Oy Verme İşlemi (Düzenleme Takibi Dahil)
+        // 2. Oy Verme İşlemi (Düzenleme Takibi ve Hile Koruması)
         public async Task SubmitVote(Guid roomId, Guid userId, string vote)
         {
             var user = await _context.Users.FindAsync(userId);
-            if (user != null)
+            var room = await _context.Rooms.FindAsync(roomId);
+
+            if (user != null && room != null)
             {
-                // Eğer kullanıcının zaten bir oyu varsa ve bu yeni oy eskisinden farklıysa, düzenlendi işaretini (IsEdited) koy
+                // ✨ UYANIK DEVELOPER KORUMASI: Oylar açıldıysa oy atılamaz!
+                if (room.IsVotingRevealed) return;
+
                 if (!string.IsNullOrEmpty(user.CurrentVote) && user.CurrentVote != vote)
                 {
                     user.IsEdited = true;
@@ -50,6 +67,10 @@ namespace PlanningPoker.API.Hubs
         // 3. Oyları Açma
         public async Task RevealVotes(Guid roomId)
         {
+            // ✨ GÜVENLİK DUVARI: İsteği atan kişiyi bul ve İzleyici (2) ise reddet
+            var caller = await _context.Users.FirstOrDefaultAsync(u => u.SignalRConnectionId == Context.ConnectionId);
+            if (caller == null || (int)caller.Role == 2) return;
+
             var room = await _context.Rooms.FindAsync(roomId);
             if (room != null)
             {
@@ -63,6 +84,10 @@ namespace PlanningPoker.API.Hubs
         // 4. Yeni Tur Başlatma (Oyları ve Kalem İkonlarını Temizler)
         public async Task ClearVotes(Guid roomId)
         {
+            // ✨ GÜVENLİK DUVARI: İzleyici (2) ise reddet
+            var caller = await _context.Users.FirstOrDefaultAsync(u => u.SignalRConnectionId == Context.ConnectionId);
+            if (caller == null || (int)caller.Role == 2) return;
+
             var room = await _context.Rooms.Include(r => r.Users).FirstOrDefaultAsync(r => r.Id == roomId);
             if (room != null)
             {
@@ -91,6 +116,10 @@ namespace PlanningPoker.API.Hubs
         // 5. Masaya Bot Ekleme
         public async Task AddBot(Guid roomId)
         {
+            // ✨ GÜVENLİK DUVARI: İzleyici (2) ise reddet
+            var caller = await _context.Users.FirstOrDefaultAsync(u => u.SignalRConnectionId == Context.ConnectionId);
+            if (caller == null || (int)caller.Role == 2) return;
+
             var room = await _context.Rooms.FindAsync(roomId);
             if (room != null)
             {
@@ -116,6 +145,10 @@ namespace PlanningPoker.API.Hubs
         // 6. Botları Kovma
         public async Task RemoveBots(Guid roomId)
         {
+            // ✨ GÜVENLİK DUVARI: İzleyici (2) ise reddet
+            var caller = await _context.Users.FirstOrDefaultAsync(u => u.SignalRConnectionId == Context.ConnectionId);
+            if (caller == null || (int)caller.Role == 2) return;
+
             var room = await _context.Rooms.Include(r => r.Users).FirstOrDefaultAsync(r => r.Id == roomId);
             if (room != null)
             {
@@ -130,6 +163,10 @@ namespace PlanningPoker.API.Hubs
         // 7. Görev Değiştirme
         public async Task ChangeTask(Guid roomId, string newTaskName)
         {
+            // ✨ GÜVENLİK DUVARI: İzleyici (2) ise reddet
+            var caller = await _context.Users.FirstOrDefaultAsync(u => u.SignalRConnectionId == Context.ConnectionId);
+            if (caller == null || (int)caller.Role == 2) return;
+
             var room = await _context.Rooms.Include(r => r.Users).FirstOrDefaultAsync(r => r.Id == roomId);
             if (room != null)
             {
@@ -158,39 +195,35 @@ namespace PlanningPoker.API.Hubs
             }
         }
 
-        // 8. ✨ BAĞLANTISI KOPAN KULLANICIYI VE BOŞ ODALARI OTOMATİK TEMİZLE ✨
+        // 8. ✨ SEKMEYİ KAPATANLARI VE BOŞ ODALARI ANINDA TEMİZLE ✨
         public override async Task OnDisconnectedAsync(Exception? exception)
         {
-            // Bağlantı ID'si üzerinden düşen kullanıcıyı bul
             var user = await _context.Users.FirstOrDefaultAsync(u => u.SignalRConnectionId == Context.ConnectionId);
 
             if (user != null)
             {
                 var roomId = user.RoomId;
 
-                // Önce düşen kullanıcıyı masadan kaldır
+                // Sekmeyi kapatanı (veya yenileyeni) anında sil
                 _context.Users.Remove(user);
                 await _context.SaveChangesAsync();
 
-                // DİKKAT: Odada başka "GERÇEK" (Bot olmayan) insan kaldı mı kontrol et
                 var remainingHumans = await _context.Users.AnyAsync(u => u.RoomId == roomId && !u.Name.StartsWith("[Bot]"));
 
                 if (!remainingHumans)
                 {
-                    // Odada hiç insan kalmadıysa odayı bul
+                    // Odada gerçek insan kalmadıysa odayı yok et
                     var roomToDelete = await _context.Rooms.Include(r => r.Users).FirstOrDefaultAsync(r => r.Id == roomId);
 
                     if (roomToDelete != null)
                     {
-                        // Odayı sil (İçinde kalan sahipsiz botlar da Entity Framework tarafından otomatik silinir)
                         _context.Rooms.Remove(roomToDelete);
                         await _context.SaveChangesAsync();
-                        // Herkes çıktığı için SignalR ile gruba mesaj atmaya gerek kalmadı
                     }
                 }
                 else
                 {
-                    // Odada hala gerçek insanlar varsa, sadece listeyi güncellemeleri için sinyal gönder
+                    // Kalanlara listeyi güncelle mesajı at
                     await Clients.Group(roomId.ToString()).SendAsync("UserUpdated");
                 }
             }
